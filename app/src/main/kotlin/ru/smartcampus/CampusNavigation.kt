@@ -1,6 +1,7 @@
 package ru.smartcampus
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation3.runtime.NavKey
@@ -26,51 +27,54 @@ internal fun CampusNavigation(model: CampusViewModel) {
     val state by model.state.collectAsStateWithLifecycle()
     val backStack = rememberNavBackStack(Home)
 
-    fun back() {
-        if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
+    LaunchedEffect(model, backStack) {
+        fun open(key: NavKey) {
+            if (backStack.lastOrNull() != key) backStack.add(key)
+        }
+
+        model.effect.collect { effect ->
+            when (effect) {
+                is CampusEffect.ShowLesson -> open(LessonDetails(effect.id))
+                is CampusEffect.ShowRoute -> open(RoomRoute(effect.room))
+                is CampusEffect.ShowArrival -> open(Arrival(effect.room))
+                CampusEffect.Back -> if (backStack.size > 1) backStack.removeAt(backStack.lastIndex) else Unit
+                CampusEffect.ResetStack -> {
+                    while (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
+                }
+            }
+        }
+    }
+
+    if (state.session != Session.SignedIn) {
+        LoginScreen(state, model::accept)
+        return
     }
 
     NavDisplay(
         backStack = backStack,
-        onBack = ::back,
+        onBack = { model.accept(CampusIntent.Back) },
         entryProvider = entryProvider {
-            entry<Home> {
-                CampusHome(
-                    state = state,
-                    onIntent = model::accept,
-                    onLesson = { backStack.add(LessonDetails(it.id)) },
-                    onRoom = { backStack.add(RoomRoute(it)) },
-                )
-            }
+            entry<Home> { CampusHome(state, model::accept) }
             entry<LessonDetails> { key ->
                 LessonDetailsScreen(
-                    state.schedule?.lessons?.find { it.id == key.lessonId },
-                    state.schedule?.savedAt,
-                    state.offline,
-                    onBack = ::back,
-                    onRoom = { backStack.add(RoomRoute(it)) },
+                    lesson = state.schedule?.lessons?.find { it.id == key.lessonId },
+                    time = state.schedule?.savedAt,
+                    offline = state.offline,
+                    loading = state.loadingSchedule,
+                    onIntent = model::accept,
                 )
             }
             entry<RoomRoute> { key ->
+                LaunchedEffect(key.room, state.offline) {
+                    model.accept(CampusIntent.EnsureRoute(key.room))
+                }
                 RouteScreen(
-                    room = key.room,
-                    offline = state.offline,
-                    onBack = ::back,
-                    onRetry = { model.accept(CampusIntent.Refresh) },
-                    onDemoConnection = { model.accept(CampusIntent.SetOffline(false)) },
-                    onArrival = { backStack.add(Arrival(key.room)) },
+                    route = state.route?.takeIf { it.room == key.room && it.offline == state.offline }
+                        ?: RouteState(key.room, state.offline),
+                    onIntent = model::accept,
                 )
             }
-            entry<Arrival> { key ->
-                ArrivalScreen(
-                    room = key.room,
-                    onBack = ::back,
-                    onSchedule = {
-                        model.accept(CampusIntent.SelectTab(Tab.Schedule))
-                        while (backStack.size > 1) back()
-                    },
-                )
-            }
+            entry<Arrival> { key -> ArrivalScreen(key.room, model::accept) }
         },
     )
 }

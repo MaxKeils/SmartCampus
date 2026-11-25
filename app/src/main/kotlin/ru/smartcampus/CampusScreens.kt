@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,6 +28,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -42,17 +44,16 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -80,8 +81,6 @@ private fun savedAt(time: Long) = timeStamp.format(Instant.ofEpochMilli(time))
 internal fun CampusHome(
     state: CampusState,
     onIntent: (CampusIntent) -> Unit,
-    onLesson: (Lesson) -> Unit,
-    onRoom: (Room) -> Unit,
 ) {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -113,16 +112,23 @@ internal fun CampusHome(
         },
     ) { inset ->
         when (state.tab) {
-            Tab.Schedule -> Screen(inset) { ScheduleContent(state, onIntent, onLesson) }
-            Tab.Map -> Screen(inset) { SearchContent(state, onIntent, onRoom) }
-            Tab.Alerts -> Screen(inset) { AlertsContent(state, onLesson) }
+            Tab.Schedule -> Screen(inset) { ScheduleContent(state, onIntent) }
+            Tab.Map -> Screen(inset) { SearchContent(state, onIntent) }
+            Tab.Alerts -> Screen(inset) { AlertsContent(state, onIntent) }
         }
     }
 }
 
 @Composable
-private fun ScheduleContent(state: CampusState, onIntent: (CampusIntent) -> Unit, onLesson: (Lesson) -> Unit) {
-    Header("Расписание")
+private fun ScheduleContent(state: CampusState, onIntent: (CampusIntent) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.weight(1f)) { Header("Расписание") }
+        TextButton(
+            onClick = { onIntent(CampusIntent.SignOut) },
+            enabled = !state.authBusy,
+        ) { Text("Выйти") }
+    }
+    state.authError?.let { Notice("Не удалось выйти", it, warning = true) }
     val monday = DemoCampus.day.minusDays((DemoCampus.day.dayOfWeek.value - 1).toLong())
     val weekTitle = "${monday.dayOfMonth}–${monday.plusDays(6).format(compactDay)}"
     Title(if (state.period == Period.Day) formattedDay(DemoCampus.day) else weekTitle)
@@ -130,29 +136,32 @@ private fun ScheduleContent(state: CampusState, onIntent: (CampusIntent) -> Unit
     Segment("День", "Неделя", firstSelected = state.period == Period.Day) {
         onIntent(CampusIntent.SelectPeriod(if (it) Period.Day else Period.Week))
     }
-    if (state.offline) {
+    if (state.offline && !state.loadingSchedule) {
         val timestamp = state.schedule?.let { "Сохранено ${savedAt(it.savedAt)}. Время и аудитория могли измениться." }
             ?: "Сохранённых данных пока нет. Восстановите связь и попробуйте снова."
         Notice("Нет связи", timestamp, warning = true)
     }
 
     val schedule = state.schedule
-    if (schedule != null) {
+    if (state.loadingSchedule) {
+        LoadingSkeleton("Загрузка расписания")
+    } else if (schedule != null) {
         if (state.period == Period.Day) {
             Header(if (state.offline) "Из сохранённой недели" else "Ближайшие занятия")
             val lessons = schedule.on(DemoCampus.day)
             if (lessons.isEmpty()) Supporting("Занятий нет")
-            lessons.forEach { LessonRow(it, onLesson) }
+            lessons.forEach { LessonRow(it, onIntent) }
         } else {
             schedule.week().forEach { (date, lessons) ->
                 Header(formattedDay(date))
-                lessons.forEach { LessonRow(it, onLesson) }
+                lessons.forEach { LessonRow(it, onIntent) }
             }
         }
         if (!state.offline) Supporting("Обновлено ${savedAt(schedule.savedAt)}")
     }
     OutlinedButton(
         onClick = { onIntent(CampusIntent.Refresh) },
+        enabled = !state.loadingSchedule,
         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
     ) { Text(if (state.offline) "Проверить снова" else "Обновить расписание") }
     HorizontalDivider()
@@ -174,15 +183,15 @@ private fun ScheduleContent(state: CampusState, onIntent: (CampusIntent) -> Unit
 }
 
 @Composable
-private fun LessonRow(lesson: Lesson, onLesson: (Lesson) -> Unit) {
+private fun LessonRow(lesson: Lesson, onIntent: (CampusIntent) -> Unit) {
     val moved = lesson.previous != null
     val details = if (moved) "Перенесено · ${lesson.current.time}\n${lesson.current.room.label}"
         else "${lesson.current.time} · ${lesson.current.room.label}"
-    ListCard(lesson.subject, details, highlighted = moved, onClick = { onLesson(lesson) })
+    ListCard(lesson.subject, details, highlighted = moved, onClick = { onIntent(CampusIntent.OpenLesson(lesson.id)) })
 }
 
 @Composable
-private fun SearchContent(state: CampusState, onIntent: (CampusIntent) -> Unit, onRoom: (Room) -> Unit) {
+private fun SearchContent(state: CampusState, onIntent: (CampusIntent) -> Unit) {
     Header("Карта кампуса")
     Title("Найти аудиторию")
     Supporting("Пошаговый план доступен для корпуса Б.")
@@ -191,6 +200,7 @@ private fun SearchContent(state: CampusState, onIntent: (CampusIntent) -> Unit, 
         onIntent(CampusIntent.Search)
         focus.clearFocus()
     }
+    val emptyQuery = state.search == RoomSearch.EmptyQuery
     OutlinedTextField(
         value = state.query,
         onValueChange = { input ->
@@ -200,48 +210,83 @@ private fun SearchContent(state: CampusState, onIntent: (CampusIntent) -> Unit, 
         label = { Text("Номер аудитории") },
         leadingIcon = { CampusIcon(R.drawable.ic_campus_search) },
         singleLine = true,
-        isError = state.emptyQuery,
-        supportingText = if (state.emptyQuery) ({ Text("Введите номер аудитории.") }) else null,
+        isError = emptyQuery,
+        supportingText = if (emptyQuery) ({ Text("Введите номер аудитории.") }) else null,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Search),
         keyboardActions = KeyboardActions(onSearch = { search() }),
     )
-    PrimaryAction("Найти", search)
-    if (!state.submitted) {
-        state.schedule?.lessons?.firstOrNull { it.current.room.routable }?.let {
-            Header("Из расписания")
-            ListCard(it.current.room.label, it.subject, highlighted = true) { onRoom(it.current.room) }
+    PrimaryAction("Найти", enabled = state.search != RoomSearch.Loading, onClick = search)
+    when (val result = state.search) {
+        RoomSearch.Idle -> {
+            if (state.recentRooms.isNotEmpty()) {
+                Header("Недавние запросы")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    state.recentRooms.forEach { room ->
+                        FilledTonalButton(onClick = {
+                            onIntent(CampusIntent.EditQuery(room))
+                            search()
+                        }) { Text(room) }
+                    }
+                }
+            }
+            state.schedule?.lessons?.firstOrNull { it.current.room.routable }?.let {
+                Header("Из расписания")
+                ListCard(it.current.room.label, it.subject, highlighted = true) {
+                    onIntent(CampusIntent.OpenRoom(it.current.room))
+                }
+            }
         }
-    } else if (!state.emptyQuery && state.matches.isEmpty()) {
-        Notice("Аудитория не найдена", "Проверьте номер. Для демонстрации попробуйте 312.", warning = true)
-    } else if (state.matches.isNotEmpty()) {
-        Header(if (state.matches.size > 1) "Выберите корпус" else "Результат поиска")
-        state.matches.forEach { room ->
-            ListCard(room.label, if (room.routable) "${room.floor}-й этаж · маршрут доступен"
-            else "${room.floor}-й этаж · учебный маршрут отсутствует", highlighted = room.routable) { onRoom(room) }
+        RoomSearch.EmptyQuery -> Unit
+        RoomSearch.Loading -> LoadingSkeleton("Поиск аудитории", rows = 2)
+        is RoomSearch.Ready -> if (result.rooms.isEmpty()) {
+            Notice("Аудитория не найдена", "Проверьте номер или попробуйте найти аудиторию 312.", warning = true)
+        } else {
+            Header(if (result.rooms.size > 1) "Выберите корпус" else "Результат поиска")
+            result.rooms.forEach { room ->
+                ListCard(room.label, if (room.routable) "${room.floor}-й этаж · маршрут доступен"
+                else "${room.floor}-й этаж · учебный маршрут отсутствует", highlighted = room.routable) {
+                    onIntent(CampusIntent.OpenRoom(room))
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun AlertsContent(state: CampusState, onLesson: (Lesson) -> Unit) {
+private fun AlertsContent(state: CampusState, onIntent: (CampusIntent) -> Unit) {
     Header("Уведомления")
     Title("Изменения расписания")
     Supporting(if (state.offline) "Из сохранённого расписания" else "Учебные уведомления")
+    if (state.loadingSchedule) {
+        LoadingSkeleton("Загрузка уведомлений")
+        return
+    }
     val changes = state.schedule?.lessons.orEmpty().filter { it.previous != null }
+        .sortedByDescending { it.current.date }
     if (changes.isEmpty()) Supporting("Переносов пока нет")
-    changes.forEach {
-        ListCard("${it.subject} · перенос", "${it.current.time}\n${it.current.room.label}", true) { onLesson(it) }
+    changes.forEach { lesson ->
+        val date = LocalDate.parse(lesson.current.date).format(compactDay)
+        val message = listOfNotNull(
+            "$date · ${lesson.current.time}",
+            lesson.current.room.label,
+            lesson.note,
+        ).joinToString("\n")
+        ListCard(lesson.subject, message, highlighted = true) {
+            onIntent(CampusIntent.OpenLesson(lesson.id))
+        }
     }
 }
 
 @Composable
 internal fun LessonDetailsScreen(
-    lesson: Lesson?, time: Long?, offline: Boolean, onBack: () -> Unit, onRoom: (Room) -> Unit,
+    lesson: Lesson?, time: Long?, offline: Boolean, loading: Boolean, onIntent: (CampusIntent) -> Unit,
 ) {
-    DetailScaffold("Детали пары", onBack, footer = lesson?.let { selected ->
-        { PrimaryAction("Маршрут от входа") { onRoom(selected.current.room) } }
+    DetailScaffold("Детали пары", { onIntent(CampusIntent.Back) }, footer = lesson?.let { selected ->
+        { PrimaryAction("Маршрут от входа") { onIntent(CampusIntent.OpenRoom(selected.current.room)) } }
     }) {
-        if (lesson == null) {
+        if (loading && lesson == null) {
+            LoadingSkeleton("Загрузка деталей пары")
+        } else if (lesson == null) {
             Notice("Пара недоступна", "Вернитесь к расписанию и обновите данные.", warning = true)
         } else {
             Supporting(formattedDay(LocalDate.parse(lesson.current.date)))
@@ -266,8 +311,10 @@ internal fun LessonDetailsScreen(
                 }
             }
             lesson.previous?.let { previous ->
-                Notice("Было", "${previous.time} · ${previous.room.label}")
+                val date = LocalDate.parse(previous.date).format(compactDay)
+                Notice("Было", "$date · ${previous.time} · ${previous.room.label}")
             }
+            lesson.note?.let { Supporting(it) }
             HorizontalDivider()
             Supporting("Источник · учебное расписание")
             time?.let { Supporting(if (offline) "Без связи · сохранено ${savedAt(it)}" else "Обновлено ${savedAt(it)}") }
@@ -276,44 +323,54 @@ internal fun LessonDetailsScreen(
 }
 
 @Composable
-internal fun RouteScreen(
-    room: Room, offline: Boolean, onBack: () -> Unit, onRetry: () -> Unit,
-    onDemoConnection: () -> Unit, onArrival: () -> Unit,
-) {
-    var upper by rememberSaveable(room) { mutableStateOf(false) }
-    val available = room.routable && !offline
-    DetailScaffold("Маршрут", onBack, footer = {
-        when {
-            available -> PrimaryAction(if (upper) "Я на месте" else "Показать 3-й этаж") {
-                if (upper) onArrival() else upper = true
-            }
-            room.routable -> {
-                PrimaryAction("Повторить", onRetry)
-                TextButton(onClick = onDemoConnection, modifier = Modifier.fillMaxWidth()) {
-                    Text("Отключить имитацию сбоя")
+internal fun RouteScreen(route: RouteState, onIntent: (CampusIntent) -> Unit) {
+    val room = route.room
+    val upper = route.upperFloor
+    val footer: (@Composable ColumnScope.() -> Unit)? = when (route.phase) {
+        RoutePhase.Loading -> null
+        RoutePhase.Ready -> {
+            {
+                PrimaryAction(if (upper) "Я на месте" else "Показать 3-й этаж") {
+                    onIntent(CampusIntent.AdvanceRoute)
                 }
             }
-            else -> PrimaryAction("Назад", onBack)
         }
-    }) {
+        RoutePhase.Unavailable -> if (room.routable) {
+            {
+                PrimaryAction("Повторить") { onIntent(CampusIntent.RetryRoute) }
+                TextButton(
+                    onClick = { onIntent(CampusIntent.SetOffline(false)) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Отключить имитацию сбоя") }
+            }
+        } else null
+    }
+    DetailScaffold("Маршрут", { onIntent(CampusIntent.Back) }, footer = footer) {
         Supporting(room.label)
-        if (available) {
-            Title(if (upper) "К аудитории ${room.number}" else "От главного входа")
-            Supporting(if (upper) "3-й этаж · дверь слева" else "${room.building} · около 3 минут")
-            Segment("1-й этаж", "3-й этаж", !upper) { upper = !it }
-            FloorPlan(upper)
-            Notice(
-                if (upper) "От лестницы до аудитории 312" else "Лестница справа от вахты",
-                if (upper) "Идите по коридору и поверните налево у двери 312." else "Пройдите мимо вахты и поднимитесь на 3-й этаж.",
-                accent = true,
-            )
-        } else if (!room.routable) {
-            Title("Маршрут недоступен")
-            Notice("План корпуса", "Учебный маршрут подготовлен до аудитории 312 в корпусе Б.")
-        } else {
-            CampusIcon(R.drawable.ic_campus_route_error, modifier = Modifier.size(26.dp))
-            Title("Не загрузился план")
-            Notice("Куда идти", "${room.building}, ${room.floor}-й этаж, аудитория ${room.number}. Восстановите связь и повторите.")
+        when (route.phase) {
+            RoutePhase.Loading -> LoadingSkeleton("Загрузка маршрута", rows = 2)
+            RoutePhase.Ready -> {
+                Title(if (upper) "К аудитории ${room.number}" else "От главного входа")
+                Supporting(if (upper) "3-й этаж · дверь слева" else "${room.building} · около 3 минут")
+                Segment("1-й этаж", "3-й этаж", !upper) {
+                    onIntent(CampusIntent.SelectFloor(!it))
+                }
+                FloorPlan(upper)
+                Notice(
+                    if (upper) "От лестницы до аудитории 312" else "Лестница справа от вахты",
+                    if (upper) "Идите по коридору и поверните налево у двери 312."
+                    else "Пройдите мимо вахты и поднимитесь на 3-й этаж.",
+                    accent = true,
+                )
+            }
+            RoutePhase.Unavailable -> if (!room.routable) {
+                Title("Маршрут недоступен")
+                Notice("План корпуса", "Учебный маршрут подготовлен до аудитории 312 в корпусе Б.")
+            } else {
+                CampusIcon(R.drawable.ic_campus_route_error, modifier = Modifier.size(26.dp))
+                Title("Не загрузился план")
+                Notice("Куда идти", "${room.building}, ${room.floor}-й этаж, аудитория ${room.number}. Восстановите связь и повторите.")
+            }
         }
     }
 }
@@ -358,27 +415,41 @@ private fun FloorPlan(upper: Boolean) {
 }
 
 @Composable
-internal fun ArrivalScreen(room: Room, onBack: () -> Unit, onSchedule: () -> Unit) {
-    DetailScaffold("Маршрут", onBack, footer = { PrimaryAction("К расписанию", onSchedule) }) {
+internal fun ArrivalScreen(room: Room, onIntent: (CampusIntent) -> Unit) {
+    DetailScaffold("Маршрут", { onIntent(CampusIntent.Back) }, footer = {
+        PrimaryAction("К расписанию") { onIntent(CampusIntent.ReturnToSchedule) }
+    }) {
         Title("Вы на месте")
         Notice(room.label, "${room.floor}-й этаж", accent = true)
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DetailScaffold(
     title: String, onBack: () -> Unit, footer: (@Composable ColumnScope.() -> Unit)?,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Scaffold(containerColor = MaterialTheme.colorScheme.background) { inset ->
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            TopAppBar(
+                title = { Text(title, Modifier.semantics { heading() }) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_arrow_back),
+                            contentDescription = stringResource(R.string.navigate_back),
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                ),
+            )
+        },
+    ) { inset ->
         Column(Modifier.padding(inset).fillMaxSize().padding(horizontal = 20.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) {
-                    Text("←", style = MaterialTheme.typography.headlineSmall,
-                        modifier = Modifier.semantics { contentDescription = "Назад" })
-                }
-                Header(title)
-            }
             Column(
                 Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(vertical = 14.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -418,8 +489,8 @@ private fun CampusIcon(@DrawableRes id: Int, modifier: Modifier = Modifier.size(
     Icon(painterResource(id), contentDescription = null, modifier = modifier)
 
 @Composable
-private fun PrimaryAction(title: String, onClick: () -> Unit) {
-    Button(onClick, modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp)) { Text(title) }
+internal fun PrimaryAction(title: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Button(onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp)) { Text(title) }
 }
 
 @Composable
@@ -440,7 +511,7 @@ private fun Segment(first: String, second: String, firstSelected: Boolean, onSel
 }
 
 @Composable
-private fun Notice(title: String, details: String, warning: Boolean = false, accent: Boolean = false) {
+internal fun Notice(title: String, details: String, warning: Boolean = false, accent: Boolean = false) {
     val palette = MaterialTheme.colorScheme
     val (background, content) = when {
         warning -> palette.tertiaryContainer to palette.onTertiaryContainer
