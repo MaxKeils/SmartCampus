@@ -167,13 +167,17 @@ internal class CampusViewModel @Inject constructor(
                 effects.trySend(CampusEffect.ShowRoute(intent.room))
             }
             is CampusIntent.EnsureRoute -> {
-                if (next.route?.room != intent.room || next.route.offline != next.offline) loadRoute(intent.room)
+                if (next.route?.room != intent.room || next.route.offline != next.offline) {
+                    val upperFloor = savedState.get<String>("routeUpperFloorRoom") == intent.room.label
+                    loadRoute(intent.room, upperFloor)
+                }
             }
-            CampusIntent.RetryRoute -> next.route?.room?.let(::loadRoute)
+            CampusIntent.RetryRoute -> next.route?.let { loadRoute(it.room, it.upperFloor) }
+            is CampusIntent.SelectFloor -> saveRouteFloor(next.route)
             CampusIntent.AdvanceRoute -> {
                 next.route?.takeIf { it.phase == RoutePhase.Ready }?.let { route ->
                     if (route.upperFloor) effects.trySend(CampusEffect.ShowArrival(route.room))
-                    else mutableState.value = reduce(next, CampusIntent.SelectFloor(true))
+                    else accept(CampusIntent.SelectFloor(true))
                 }
             }
             CampusIntent.Back -> effects.trySend(CampusEffect.Back)
@@ -208,6 +212,7 @@ internal class CampusViewModel @Inject constructor(
                 if (auth.signIn(input.login, input.password).first()) {
                     val signedIn = CampusState(session = Session.SignedIn)
                     saveUi(signedIn)
+                    saveRouteFloor(null)
                     effects.trySend(CampusEffect.ResetStack)
                     mutableState.value = signedIn
                     loadSchedule()
@@ -230,6 +235,7 @@ internal class CampusViewModel @Inject constructor(
                 routeJob?.cancel()
                 val signedOut = CampusState(session = Session.SignedOut)
                 saveUi(signedOut)
+                saveRouteFloor(null)
                 effects.trySend(CampusEffect.ResetStack)
                 mutableState.value = signedOut
             } catch (_: IOException) {
@@ -262,15 +268,20 @@ internal class CampusViewModel @Inject constructor(
         }
     }
 
-    private fun loadRoute(room: Room) {
+    private fun loadRoute(room: Room, upperFloor: Boolean = false) {
         routeJob?.cancel()
-        val loading = RouteState(room = room, offline = mutableState.value.offline)
+        val loading = RouteState(room = room, offline = mutableState.value.offline, upperFloor = upperFloor)
+        saveRouteFloor(loading)
         mutableState.value = mutableState.value.copy(route = loading)
         routeJob = viewModelScope.launch {
             val available = repository.route(room, loading.offline).first()
             val phase = if (available) RoutePhase.Ready else RoutePhase.Unavailable
             mutableState.value = mutableState.value.copy(route = loading.copy(phase = phase))
         }
+    }
+
+    private fun saveRouteFloor(route: RouteState?) {
+        savedState["routeUpperFloorRoom"] = route?.takeIf { it.upperFloor }?.room?.label
     }
 
     private fun saveUi(value: CampusState) {
