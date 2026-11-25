@@ -17,6 +17,7 @@ internal data class CampusState(
     val schedule: Schedule? = null,
     val query: String = "",
     val submitted: Boolean = false,
+    val recentRooms: List<String> = emptyList(),
 ) {
     val matches get() = if (submitted) DemoCampus.search(query) else emptyList()
     val emptyQuery get() = submitted && query.isBlank()
@@ -36,7 +37,12 @@ internal fun reduce(state: CampusState, intent: CampusIntent): CampusState = whe
     is CampusIntent.SelectPeriod -> state.copy(period = intent.period)
     is CampusIntent.EditQuery -> state.copy(query = intent.value, submitted = false)
     is CampusIntent.SetOffline -> state.copy(offline = intent.value)
-    CampusIntent.Search -> state.copy(submitted = true)
+    CampusIntent.Search -> {
+        val number = state.query.trim()
+        val recent = if (DemoCampus.search(number).isEmpty()) state.recentRooms
+            else (listOf(number) + state.recentRooms).distinct().take(4)
+        state.copy(submitted = true, recentRooms = recent)
+    }
     CampusIntent.Refresh -> state
 }
 
@@ -53,6 +59,7 @@ internal class CampusViewModel @Inject constructor(
         schedule = repository.load(offline),
         query = savedState["query"] ?: "",
         submitted = savedState["submitted"] ?: false,
+        recentRooms = savedState.get<ArrayList<String>>("recentRooms").orEmpty(),
     ))
     val state = mutableState.asStateFlow()
 
@@ -69,5 +76,6 @@ internal class CampusViewModel @Inject constructor(
         savedState["offline"] = current.offline
         savedState["query"] = current.query
         savedState["submitted"] = current.submitted
+        savedState["recentRooms"] = ArrayList(current.recentRooms)
     }
 }

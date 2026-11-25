@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -207,6 +208,17 @@ private fun SearchContent(state: CampusState, onIntent: (CampusIntent) -> Unit, 
     )
     PrimaryAction("Найти", search)
     if (!state.submitted) {
+        if (state.recentRooms.isNotEmpty()) {
+            Header("Недавние запросы")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                state.recentRooms.forEach { room ->
+                    FilledTonalButton(onClick = {
+                        onIntent(CampusIntent.EditQuery(room))
+                        search()
+                    }) { Text(room) }
+                }
+            }
+        }
         state.schedule?.lessons?.firstOrNull { it.current.room.routable }?.let {
             Header("Из расписания")
             ListCard(it.current.room.label, it.subject, highlighted = true) { onRoom(it.current.room) }

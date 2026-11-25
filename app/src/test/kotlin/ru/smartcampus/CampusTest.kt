@@ -64,4 +64,18 @@ class CampusTest {
         assertTrue(updated.offline)
         assertEquals(initial.schedule, updated.schedule)
     }
+
+    @Test
+    fun onlySuccessfulSearchesEnterHistoryAndRepeatedRoomsMoveToTop() {
+        fun submit(state: CampusState, value: String) =
+            reduce(reduce(state, CampusIntent.EditQuery(value)), CampusIntent.Search)
+
+        val first = submit(CampusState(), "312")
+        val second = submit(submit(first, "999"), "204")
+        val repeated = submit(second, "312")
+        val onSchedule = reduce(repeated, CampusIntent.SelectTab(Tab.Schedule))
+
+        assertEquals(listOf("204", "312"), second.recentRooms)
+        assertEquals(listOf("312", "204"), onSchedule.recentRooms)
+    }
 }
