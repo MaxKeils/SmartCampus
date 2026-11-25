@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.SmartCampus" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">#111C18</item>
+    </style>
+</resources>
